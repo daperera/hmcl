@@ -13,11 +13,11 @@ PROJECT_ROOT = Path(__file__).resolve().parents[1]
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
-from hmcl.data import build_synthetic_dataset
+from hmcl.data import build_dataset, is_uci_dataset
 from hmcl.losses import annealed_mcl_loss
-from hmcl.models import NoiseConditionedMLP
+from hmcl.models import build_model
 from hmcl.noise import NoiseSchedule, sigma_to_temperature
-from hmcl.utils import cycle, load_yaml, resolve_device, save_jsonl, save_yaml, set_seed
+from hmcl.utils import cycle, load_yaml, resolve_device, save_jsonl, save_yaml, set_seed, method_model_sigma
 from scripts.plot_diagnostics import generate_loss_plot, generate_sigma_wta_sweep_plot
 from scripts.plot_trajectories import generate_trajectory_plot, generate_trajectory_gif
 
@@ -46,27 +46,53 @@ def move_batch(batch: dict[str, torch.Tensor], device: torch.device) -> dict[str
 
 @torch.no_grad()
 def evaluate(
-    model: NoiseConditionedMLP,
+    model: torch.nn.Module,
     loader: DataLoader,
     schedule: NoiseSchedule,
     loss_config: dict,
     device: torch.device,
-    max_batches: int = 8,
+    max_batches: int = 0,
     eval_sigma: torch.Tensor | None = None,
+    method: str = "hmcl",
 ) -> dict[str, float]:
     model.eval()
     totals: dict[str, float] = {}
     count = 0
     for batch_index, batch in enumerate(loader):
-        if batch_index >= max_batches:
+        if (batch_index >= max_batches) and (max_batches > 0):
             break
         batch = move_batch(batch, device)
         if eval_sigma is None:
-            sigma = schedule.sample(batch["x"].shape[0], device=device)
+            sigma = torch.zeros(batch["x"].shape[0], device=device)
         else:
             sigma = eval_sigma.to(device=device).expand(batch["x"].shape[0])
-        predictions = model(batch["x"], sigma)
-        _, metrics = annealed_mcl_loss(predictions, batch["y"], sigma=sigma, **loss_config)
+        model_sigma = method_model_sigma(method, sigma)
+        predictions, scores = model(batch["x"], model_sigma)
+        _, metrics = annealed_mcl_loss(predictions, scores, batch["y"], sigma=sigma, **loss_config)
+        denormalize_y = getattr(loader.dataset, "denormalize_y", None)
+        if callable(denormalize_y):
+            predictions_original = denormalize_y(predictions)
+            target_original = denormalize_y(batch["y"])
+            weighted_prediction = (scores[..., None] * predictions_original).sum(dim=1) / scores.sum(dim=1, keepdim=True).clamp_min(1e-8)
+            min_squared_error = (
+                predictions_original.sub(target_original[:, None, :])
+                .pow(2)
+                .sum(dim=-1)
+                .min(dim=1)
+                .values
+            )
+            weighted_rmse_original = (
+                weighted_prediction
+                .sub(target_original)
+                .pow(2)
+                .sum(dim=-1)
+            )
+            metrics = {
+                **metrics,
+                "min_rmse_original": min_squared_error.mean().sqrt().detach(),
+                "weighted_rmse_original": weighted_rmse_original.mean().sqrt().detach(),
+            }
+
         for key, value in metrics.items():
             totals[key] = totals.get(key, 0.0) + float(value)
         count += 1
@@ -105,12 +131,13 @@ def method_loss_config(method: str, config: dict) -> dict:
     loss_config = dict(config["loss"])
     if method == "mcl":
         loss_config["assignment"] = "wta"
+        loss_config["score_assignment"] = "wta"
     return loss_config
 
 
 def save_checkpoint(
     path: Path,
-    model: NoiseConditionedMLP,
+    model: torch.nn.Module,
     config: dict,
     step: int,
     train_data,
@@ -140,13 +167,8 @@ def save_checkpoint(
     torch.save(checkpoint, path)
 
 
-def main() -> None:
-    args = parse_args()
-    config = load_yaml(args.config)
-    if args.steps is not None:
-        config["optim"]["steps"] = args.steps
-    if args.output_dir is not None:
-        config["run"]["output_dir"] = str(args.output_dir)
+def train(config: dict) -> None:
+    
 
     set_seed(int(config["run"]["seed"]))
     method = get_method(config)
@@ -157,20 +179,39 @@ def main() -> None:
 
     data_config = dict(config["data"])
     name = data_config.pop("name")
-    n_train = data_config.pop("n_train")
-    n_val = data_config.pop("n_val")
-    batch_size = data_config.pop("batch_size")
-    train_data = build_synthetic_dataset(name, split="train", n_samples=n_train, **data_config)
-    val_data = build_synthetic_dataset(name, split="val", n_samples=n_val, **data_config)
-    train_loader = DataLoader(train_data, batch_size=batch_size, shuffle=True, drop_last=True)
-    val_loader = DataLoader(val_data, batch_size=batch_size, shuffle=False)
+    source = data_config.pop("source", None)
+    n_train = data_config.pop("n_train", None)
+    n_val = data_config.pop("n_val", None)
+    val_split = data_config.pop("val_split", "val")
+    batch_size = int(data_config.pop("batch_size"))
+    train_config = dict(data_config)
+    val_config = dict(data_config)
+    if n_train is not None:
+        train_config["n_samples"] = n_train
+    if n_val is not None:
+        val_config["n_samples"] = n_val
+    source_name = (source or ("uci" if is_uci_dataset(name) else "synthetic")).lower()
+    train_data = build_dataset(name, split="train", source=source, **train_config)
+    val_data = build_dataset(name, split=val_split, source=source, **val_config)
+    train_batch_size = min(batch_size, len(train_data))
+    val_batch_size = min(batch_size, len(val_data))
+    train_loader = DataLoader(
+        train_data,
+        batch_size=train_batch_size,
+        shuffle=True,
+        drop_last=source_name == "synthetic" and len(train_data) >= batch_size,
+    )
+    val_loader = DataLoader(val_data, batch_size=val_batch_size, shuffle=False)
     train_iter = cycle(train_loader)
 
     schedule = NoiseSchedule(**config["noise"])
-    model = NoiseConditionedMLP(
+    model_config = dict(config["model"])
+    model_name = model_config.pop("name")
+    model = build_model(
+        model_name,
         input_dim=train_data.spec.input_dim,
         target_dim=train_data.spec.target_dim,
-        **config["model"],
+        **model_config,
     ).to(device)
     optimizer = torch.optim.AdamW(
         model.parameters(),
@@ -186,6 +227,7 @@ def main() -> None:
 
     progress = trange(1, steps + 1, desc=config["run"]["name"])
     checkpoint_path = output_dir / "last.pt"
+    val_metrics = {}
     for step in progress:
         batch = move_batch(next(train_iter), device)
         sigma = method_batch_sigma(
@@ -196,9 +238,11 @@ def main() -> None:
             steps=steps,
             device=device,
         )
-        predictions = model(batch["x"], sigma)
+        model_sigma = method_model_sigma(method, sigma)
+        predictions, scores = model(batch["x"], model_sigma)
         loss, metrics = annealed_mcl_loss(
             predictions,
+            scores,
             batch["y"],
             sigma=sigma,
             **method_loss_config(method, config),
@@ -229,7 +273,8 @@ def main() -> None:
                 schedule,
                 method_loss_config(method, config),
                 device=device,
-                eval_sigma=sigma[:1] if method != "hmcl" else None,
+                eval_sigma=None, #sigma[:1] if method != "hmcl" else None,
+                method=method,
             )
             save_jsonl({"step": step, **val_metrics}, metrics_path)
             save_checkpoint(
@@ -252,35 +297,48 @@ def main() -> None:
                     sigma=sigma,
                 )
 
-    if method != "mcl":
+    if config["plot"].get("enable", True):
+        num_inputs = int(config["plot"].get("num_inputs", 3))
+        num_sigmas = int(config["plot"].get("num_sigmas", 16))
+        if method != "mcl":
+            generate_trajectory_plot(
+                checkpoint=checkpoint_path,
+                device_name=str(device),
+                num_inputs=num_inputs,
+                num_sigmas=num_sigmas,
+                method=method,
+                plot_mode="trajectory",
+            )
+            generate_trajectory_gif(
+                checkpoint=checkpoint_path,
+                device_name=str(device),
+                num_inputs=num_inputs,
+                num_sigmas=num_sigmas,
+                method=method,
+            )
         generate_trajectory_plot(
             checkpoint=checkpoint_path,
+            output=checkpoint_path.with_name("final_configuration.png"),
             device_name=str(device),
-            num_inputs=int(config["plot"]["num_inputs"]),
-            num_sigmas=int(config["plot"]["num_sigmas"]),
+            num_inputs=num_inputs,
+            num_sigmas=num_sigmas,
             method=method,
-            plot_mode="trajectory",
+            plot_mode="last",
         )
-        generate_trajectory_gif(
-            checkpoint=checkpoint_path,
-            device_name=str(device),
-            num_inputs=int(config["plot"]["num_inputs"]),
-            num_sigmas=int(config["plot"]["num_sigmas"]),
-            method=method,
-        )
-    generate_trajectory_plot(
-        checkpoint=checkpoint_path,
-        output=checkpoint_path.with_name("final_configuration.png"),
-        device_name=str(device),
-        num_inputs=int(config["plot"]["num_inputs"]),
-        num_sigmas=int(config["plot"]["num_sigmas"]),
-        method=method,
-        plot_mode="last",
-    )
-    generate_loss_plot(metrics_path)
-    if method != "mcl":
-        generate_sigma_wta_sweep_plot(checkpoint=checkpoint_path, device_name=str(device))
+        generate_loss_plot(metrics_path)
+        if method != "mcl":
+            generate_sigma_wta_sweep_plot(checkpoint=checkpoint_path, device_name=str(device))
+
+    return val_metrics
+
 
 
 if __name__ == "__main__":
-    main()
+    args = parse_args()
+    config = load_yaml(args.config)
+    if args.steps is not None:
+        config["optim"]["steps"] = args.steps
+    if args.output_dir is not None:
+        config["run"]["output_dir"] = str(args.output_dir)
+
+    train(config)

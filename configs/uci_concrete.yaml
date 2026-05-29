@@ -1,0 +1,49 @@
+run:
+  name: uci_concrete
+  method: amcl
+  seed: 1
+  output_dir: runs/uci_concrete
+  device: auto
+
+data:
+  source: uci
+  name: concrete
+  data_root: data/uci
+  max_split: 1
+  train_ratio: 0.8
+  batch_size: 1024
+  seed: 1
+  normalize_x: true
+  normalize_y: true
+  one_hot_encoding: false
+  val_split: val
+
+noise:
+  sigma_init: 0.5
+  sigma_decay: 0.95 
+  distribution: exponential_decay
+
+model:
+  name: base_mlp
+  num_hypotheses: 5
+  hidden_dim: 50
+  depth: 1
+  detach_scores: false
+
+loss:
+  assignment: softmin
+  temperature_scale: 1
+  temperature_power: 1
+  temperature_floor: 0.0005
+  detach_responsibilities: true
+  score_assignment: wta
+
+optim:
+  lr: 0.01
+  weight_decay: 0.0
+  steps: 1000
+  log_every: 100
+  val_every: 100
+
+plot:
+  enable: false

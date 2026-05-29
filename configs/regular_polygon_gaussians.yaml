@@ -1,6 +1,6 @@
 run:
   name: regular_polygon_gaussians
-  method: hmcl
+  method: amcl
   seed: 23
   output_dir: runs/regular_polygon_gaussians
   device: auto
@@ -20,6 +20,7 @@ noise:
   distribution: log_uniform # log_uniform
 
 model:
+  name: noise_conditioned_mlp
   num_hypotheses: 9 # 12
   hidden_dim: 192
   depth: 5

@@ -34,8 +34,8 @@ def main() -> None:
         depth=2,
     )
     sigma = schedule.sample(batch["x"].shape[0])
-    predictions = model(batch["x"], sigma)
-    loss, metrics = annealed_mcl_loss(predictions, batch["y"], sigma=sigma)
+    predictions, scores = model(batch["x"], sigma)
+    loss, metrics = annealed_mcl_loss(predictions, scores, batch["y"], sigma=sigma)
     loss.backward()
     print(
         "ok",

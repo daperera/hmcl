@@ -17,11 +17,11 @@ PROJECT_ROOT = Path(__file__).resolve().parents[1]
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
-from hmcl.data import build_synthetic_dataset
+from hmcl.data import build_dataset
 from hmcl.inference import align_hypothesis_trajectories, cluster_hypotheses, predict_sigma_grid
-from hmcl.models import NoiseConditionedMLP
+from hmcl.models import build_model
 from hmcl.noise import NoiseSchedule, sigma_to_temperature
-from hmcl.utils import resolve_device
+from hmcl.utils import resolve_device, method_model_sigma
 
 
 class TrajectoryData(TypedDict):
@@ -97,20 +97,23 @@ def load_checkpoint(checkpoint_path: Path, device: torch.device) -> dict:
     return torch.load(checkpoint_path, map_location=device, weights_only=False)
 
 
-def model_from_checkpoint(checkpoint: dict, device: torch.device) -> NoiseConditionedMLP:
+def model_from_checkpoint(checkpoint: dict, device: torch.device) -> torch.nn.Module:
     config = checkpoint["config"]
     spec = checkpoint["spec"]
-    model = NoiseConditionedMLP(
+    model_config = dict(config["model"])
+    model_name = model_config.pop("name")
+    model = build_model(
+        model_name,
         input_dim=spec["input_dim"],
         target_dim=spec["target_dim"],
-        **config["model"],
+        **model_config,
     ).to(device)
     model.load_state_dict(checkpoint["model"])
     model.eval()
     return model
 
 
-def load_model(checkpoint_path: Path, device: torch.device) -> tuple[NoiseConditionedMLP, dict]:
+def load_model(checkpoint_path: Path, device: torch.device) -> tuple[torch.nn.Module, dict]:
     checkpoint = load_checkpoint(checkpoint_path, device)
     return model_from_checkpoint(checkpoint, device), checkpoint["config"]
 
@@ -130,13 +133,17 @@ def _build_plot_tensors(
 ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
     data_config = dict(config["data"])
     name = data_config.pop("name")
-    data_config["n_samples"] = max(num_inputs, num_background, 256)
+    source = data_config.pop("source", None)
+    n_val = data_config.pop("n_val", None)
     data_config.pop("n_train", None)
-    data_config.pop("n_val", None)
     data_config.pop("batch_size", None)
-    dataset = build_synthetic_dataset(name, split="test", **data_config)
-    x = torch.stack([dataset[index]["x"] for index in range(num_inputs)], dim=0)
-    target = torch.stack([dataset[index]["y"] for index in range(num_inputs)], dim=0)
+    data_config.pop("val_split", None)
+    if n_val is not None:
+        data_config["n_samples"] = max(num_inputs, num_background, 256)
+    dataset = build_dataset(name, split="test", source=source, **data_config)
+    count = min(num_inputs, len(dataset))
+    x = torch.stack([dataset[index]["x"] for index in range(count)], dim=0)
+    target = torch.stack([dataset[index]["y"] for index in range(count)], dim=0)
     background = torch.stack(
         [dataset[index]["y"] for index in range(min(num_background, len(dataset)))],
         dim=0,
@@ -158,12 +165,15 @@ def _predict_single_checkpoint(
     checkpoint_data: dict,
     x: torch.Tensor,
     sigma_value: float,
+    method: str,
     device: torch.device,
 ) -> torch.Tensor:
     model = model_from_checkpoint(checkpoint_data, device)
     sigma = torch.full((x.shape[0],), float(sigma_value), device=device)
     with torch.no_grad():
-        return model(x.to(device), sigma).cpu()
+        model_sigma = method_model_sigma(method, sigma_value)
+        predictions, scores = model(x.to(device), model_sigma)
+        return predictions.cpu()
 
 
 def _prepare_trajectory_data(
@@ -203,19 +213,19 @@ def _prepare_trajectory_data(
                     ).item()
                 )
             level_values.append(level_value)
-            prediction_steps.append(_predict_single_checkpoint(step_checkpoint, x, sigma_value, device))
+            prediction_steps.append(_predict_single_checkpoint(step_checkpoint, x, sigma_value, method, device))
         sigmas = torch.tensor(level_values)
         predictions = torch.stack(prediction_steps, dim=0)
         level_label = "checkpoint training temperature"
     elif resolved_method == "mcl":
         sigma_value = float(checkpoint_data.get("training_sigma", schedule.sigma_min))
         sigmas = torch.tensor([sigma_value])
-        predictions = _predict_single_checkpoint(checkpoint_data, x, sigma_value, device).unsqueeze(0)
+        predictions = _predict_single_checkpoint(checkpoint_data, x, sigma_value, resolved_method, device).unsqueeze(0)
         level_label = "final checkpoint"
     else:
         model = model_from_checkpoint(checkpoint_data, device)
         sigmas = schedule.grid(num_sigmas)
-        predictions = predict_sigma_grid(model, x, sigmas, device=device)
+        predictions = predict_sigma_grid(model, x, sigmas, resolved_method, device=device)
         level_label = "sigma"
 
     display_predictions = align_hypothesis_trajectories(predictions) if align and len(sigmas) > 1 else predictions

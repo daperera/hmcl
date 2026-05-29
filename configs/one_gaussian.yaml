@@ -1,6 +1,6 @@
 run:
   name: one_gaussian
-  method: hmcl
+  method: mcl
   seed: 23
   output_dir: runs/one_gaussian
   device: auto
@@ -16,9 +16,10 @@ data:
 noise:
   sigma_min: 0.01
   sigma_max: 2.3
-  distribution: uniform # log_uniform
+  distribution: log_uniform # uniform
 
 model:
+  name: noise_conditioned_mlp
   num_hypotheses: 9 # 12
   hidden_dim: 192
   depth: 5
@@ -37,11 +38,15 @@ loss:
 optim:
   lr: 0.0008
   weight_decay: 0.000001
-  steps: 5000 # 3500
+  steps: 5000 # 5000 # 3500
   log_every: 100
   val_every: 500
 
 plot:
   num_inputs: 1
-  num_sigmas: 16 
+  num_sigmas: 32 
+  noise:
+    sigma_min: 0.01
+    sigma_max: 1
+    distribution: log_uniform
 

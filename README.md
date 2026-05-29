@@ -52,6 +52,16 @@ Set `run.method` in a config to choose the training/plotting mode:
 
 For `hmcl` and `amcl`, training writes `trajectories.png` for the full static trajectory and `trajectories.gif` for the animated trajectory. All methods also write `final_configuration.png` for the last/final prediction configuration.
 
+## UCI Benchmarks
+
+The downloaded UCI benchmark files under `data/uci/` are supported through `data.source: uci`. Example:
+
+```bash
+python scripts/train_synthetic.py --config configs/uci_concrete.yaml
+```
+
+The loader uses the provided benchmark split files, fits X/y standardization on the train split only, and leaves one-hot encoding disabled by default to match the referenced aMCL UCI protocol.
+
 ## Plot Prediction Trajectories
 
 ```bash

@@ -18,8 +18,8 @@ def test_noise_conditioned_mcl_backward() -> None:
         depth=1,
     )
     sigma = schedule.sample(16)
-    predictions = model(batch["x"], sigma)
-    loss, metrics = annealed_mcl_loss(predictions, batch["y"], sigma=sigma)
+    predictions, scores = model(batch["x"], sigma)
+    loss, metrics = annealed_mcl_loss(predictions, scores, batch["y"], sigma=sigma)
     loss.backward()
 
     assert predictions.shape == (16, 5, 2)

@@ -11,6 +11,8 @@ class NoiseSchedule:
 
     sigma_min: float = 0.01
     sigma_max: float = 1.0
+    sigma_init: float = 0.5
+    sigma_decay: float = 0.95
     distribution: str = "log_uniform"
     num_discrete: int | None = None
 
@@ -19,7 +21,7 @@ class NoiseSchedule:
             raise ValueError("sigma_min must be positive because noise embeddings use log(sigma).")
         if self.sigma_max < self.sigma_min:
             raise ValueError("sigma_max must be greater than or equal to sigma_min.")
-        valid = {"log_uniform", "uniform", "discrete"}
+        valid = {"log_uniform", "uniform", "discrete", "exponential_decay"}
         if self.distribution not in valid:
             raise ValueError(f"Unknown distribution {self.distribution!r}; expected one of {valid}.")
         if self.distribution == "discrete" and (self.num_discrete is None or self.num_discrete < 2):
@@ -53,6 +55,8 @@ class NoiseSchedule:
                 steps=count,
                 device=device,
             )
+        if self.distribution == "exponential_decay":
+            return self.sigma_init * self.sigma_decay ** torch.arange(count).to(device)
         return torch.linspace(self.sigma_min, self.sigma_max, steps=count, device=device)
 
 

@@ -1,6 +1,6 @@
 run:
   name: hierarchical_polygon_gaussians
-  method: hmcl
+  method: amcl
   seed: 23
   output_dir: runs/hierarchical_polygon_gaussians
   device: auto
@@ -22,6 +22,7 @@ noise:
   distribution: log_uniform
 
 model:
+  name: noise_conditioned_mlp
   num_hypotheses: 27 # 12
   hidden_dim: 192
   depth: 5

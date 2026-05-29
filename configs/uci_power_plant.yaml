@@ -1,0 +1,48 @@
+run:
+  name: uci_power_plant
+  method: hmcl
+  seed: 1
+  output_dir: runs/uci_power_plant
+  device: auto
+
+data:
+  source: uci
+  name: power-plant
+  data_root: data/uci
+  max_split: 20
+  train_ratio: 0.8
+  batch_size: 1024
+  seed: 1
+  normalize_x: true
+  normalize_y: true
+  one_hot_encoding: false
+  val_split: val
+
+noise:
+  sigma_min: 0.02
+  sigma_max: 1.0
+  distribution: log_uniform
+
+model:
+  name: base_mlp
+  num_hypotheses: 5
+  hidden_dim: 50
+  depth: 1
+
+loss:
+  assignment: softmin
+  temperature_scale: 0.75
+  temperature_power: 2.0
+  temperature_floor: 0.0005
+  detach_responsibilities: true
+
+optim:
+  lr: 0.01
+  weight_decay: 0.0
+  steps: 1000
+  log_every: 100
+  val_every: 500
+
+plot:
+  num_inputs: 4
+  num_sigmas: 16

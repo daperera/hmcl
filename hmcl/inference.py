@@ -5,12 +5,15 @@ import torch
 from scipy.cluster.hierarchy import fcluster, linkage
 from scipy.optimize import linear_sum_assignment
 
+from hmcl.utils import method_model_sigma
+
 
 @torch.no_grad()
 def predict_sigma_grid(
     model: torch.nn.Module,
     x: torch.Tensor,
     sigmas: torch.Tensor,
+    method: str = "noise_conditioned_mlp",
     device: torch.device | str | None = None,
 ) -> torch.Tensor:
     """Predict hypotheses for every sigma.
@@ -25,7 +28,9 @@ def predict_sigma_grid(
     outputs = []
     for sigma in sigmas.to(device):
         sigma_batch = torch.full((x.shape[0],), float(sigma), device=device)
-        outputs.append(model(x, sigma_batch).detach().cpu())
+        model_sigma = method_model_sigma(method, sigma_batch)
+        predictions, scores = model(x, model_sigma)
+        outputs.append(predictions.detach().cpu())
     return torch.stack(outputs, dim=0)
 
 

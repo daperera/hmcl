@@ -24,6 +24,7 @@ def squared_l2_distances(predictions: torch.Tensor, target: torch.Tensor) -> tor
 
 def annealed_mcl_loss(
     predictions: torch.Tensor,
+    scores: torch.Tensor,
     target: torch.Tensor,
     sigma: torch.Tensor | None = None,
     temperature: torch.Tensor | float | None = None,
@@ -33,14 +34,15 @@ def annealed_mcl_loss(
     temperature_floor: float = 1e-4,
     detach_responsibilities: bool = True,
     epsilon: float = 0.05,
+    scores_weight: float = 1.0,
+    score_assignment: str = "wta",
 ) -> tuple[torch.Tensor, Mapping[str, torch.Tensor]]:
     """Compute a noise-conditioned MCL regression loss."""
 
     distances = squared_l2_distances(predictions, target)
+    min_distance, winner = distances.min(dim=1)
 
     if assignment == "wta":
-        winner_distance, winner = distances.min(dim=1)
-        loss = winner_distance.mean()
         responsibilities = F.one_hot(winner, num_classes=distances.shape[1]).to(distances.dtype)
     else:
         if temperature is None:
@@ -58,23 +60,35 @@ def annealed_mcl_loss(
         if assignment == "softmin":
             responsibilities = soft.detach() if detach_responsibilities else soft
         elif assignment == "epsilon_wta":
-            winner = distances.argmin(dim=1)
             hard = F.one_hot(winner, num_classes=distances.shape[1]).to(distances.dtype)
             responsibilities = (1.0 - epsilon) * hard + epsilon * soft
             responsibilities = responsibilities.detach() if detach_responsibilities else responsibilities
         else:
-            raise ValueError("assignment must be one of 'softmin', 'epsilon_wta', or 'wta'.")
+            raise ValueError("assignment must be one of 'softmin', 'epsilon_wta', or 'wta'.")    
 
-        loss = (responsibilities * distances).sum(dim=1).mean()
+    if score_assignment == "prediction_assignment":
+        score_target = responsibilities
+    elif score_assignment == "wta":
+        score_target = F.one_hot(
+            winner,
+            num_classes=distances.shape[1],
+        ).to(distances.dtype)
+    else:
+        raise ValueError("score_assignment must be one of 'prediction_assignment' or 'wta'.")
+    
+    prediction_loss = (responsibilities * distances).sum(dim=1).mean()   
+    score_loss = F.binary_cross_entropy(scores, score_target.detach())
+    loss = prediction_loss + scores_weight * score_loss
 
-    min_distance, winner = distances.min(dim=1)
     counts = torch.bincount(winner, minlength=distances.shape[1]).to(predictions.dtype)
     counts = counts / counts.sum().clamp_min(1.0)
-    entropy = -(responsibilities.clamp_min(1e-8) * responsibilities.clamp_min(1e-8).log()).sum(
+    entropy = -(responsibilities.detach().clamp_min(1e-8) * responsibilities.detach().clamp_min(1e-8).log()).sum(
         dim=1
     )
     metrics = {
         "loss": loss.detach(),
+        "prediction_loss": prediction_loss.detach(),
+        "score_loss": score_loss.detach(),
         "min_distance": min_distance.mean().detach(),
         "assignment_entropy": entropy.mean().detach(),
         "winner_usage_min": counts.min().detach(),

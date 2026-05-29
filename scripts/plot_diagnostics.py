@@ -17,11 +17,11 @@ PROJECT_ROOT = Path(__file__).resolve().parents[1]
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
-from hmcl.data import build_synthetic_dataset
+from hmcl.data import build_dataset
 from hmcl.losses import annealed_mcl_loss
-from hmcl.models import NoiseConditionedMLP
+from hmcl.models import build_model
 from hmcl.noise import NoiseSchedule, sigma_to_temperature
-from hmcl.utils import resolve_device, save_jsonl
+from hmcl.utils import resolve_device, save_jsonl, method_model_sigma
 
 
 def _read_metrics(path: Path) -> list[dict[str, Any]]:
@@ -95,14 +95,17 @@ def generate_loss_plot(metrics_path: Path, output: Path | None = None) -> Path:
     return output
 
 
-def _load_model(checkpoint_path: Path, device: torch.device) -> tuple[NoiseConditionedMLP, dict]:
+def _load_model(checkpoint_path: Path, device: torch.device) -> tuple[torch.nn.Module, dict]:
     checkpoint = torch.load(checkpoint_path, map_location=device, weights_only=False)
     config = checkpoint["config"]
     spec = checkpoint["spec"]
-    model = NoiseConditionedMLP(
+    model_config = dict(config["model"])
+    model_name = model_config.pop("name")
+    model = build_model(
+        model_name,
         input_dim=spec["input_dim"],
         target_dim=spec["target_dim"],
-        **config["model"],
+        **model_config,
     ).to(device)
     model.load_state_dict(checkpoint["model"])
     model.eval()
@@ -112,10 +115,14 @@ def _load_model(checkpoint_path: Path, device: torch.device) -> tuple[NoiseCondi
 def _build_eval_loader(config: dict, batch_size: int | None = None) -> DataLoader:
     data_config = dict(config["data"])
     name = data_config.pop("name")
-    n_val = int(data_config.pop("n_val", 4096))
+    source = data_config.pop("source", None)
+    n_val = data_config.pop("n_val", None)
     data_config.pop("n_train", None)
+    split = data_config.pop("val_split", "val")
     configured_batch_size = int(data_config.pop("batch_size", 1024))
-    dataset = build_synthetic_dataset(name, split="val", n_samples=n_val, **data_config)
+    if n_val is not None:
+        data_config["n_samples"] = int(n_val)
+    dataset = build_dataset(name, split=split, source=source, **data_config)
     return DataLoader(dataset, batch_size=batch_size or configured_batch_size, shuffle=False)
 
 
@@ -138,6 +145,7 @@ def generate_sigma_wta_sweep_plot(
 
     device = resolve_device(device_name)
     model, config = _load_model(checkpoint, device)
+    method = config.get("run", {}).get("method", "hmcl")
     noise_config = config.get("plot", {}).get("noise", config["noise"])
     schedule = NoiseSchedule(**noise_config)
     loss_config = dict(config["loss"])
@@ -167,9 +175,11 @@ def generate_sigma_wta_sweep_plot(
                 batch = _move_batch(batch, device)
                 batch_size = batch["x"].shape[0]
                 sigma_batch = torch.full((batch_size,), sigma_float, device=device)
-                predictions = model(batch["x"], sigma_batch)
+                model_sigma = method_model_sigma(method, sigma_batch)
+                predictions, scores = model(batch["x"], model_sigma)
                 loss, metrics = annealed_mcl_loss(
                     predictions,
+                    scores,
                     batch["y"],
                     assignment="wta",
                 )
