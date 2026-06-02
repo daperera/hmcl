@@ -1,6 +1,6 @@
 run:
   name: regular_polygon_gaussians
-  method: amcl
+  method: hmcl
   seed: 23
   output_dir: runs/regular_polygon_gaussians
   device: auto
@@ -17,7 +17,7 @@ data:
 noise:
   sigma_min: 0.001
   sigma_max: 2.5
-  distribution: log_uniform # log_uniform
+  distribution: uniform # log_uniform
 
 model:
   name: noise_conditioned_mlp
@@ -26,20 +26,20 @@ model:
   depth: 5
   noise_embedding_dim: 64
   noise_hidden_dim: 128
-  noise_kind: smooth # log # fourier fouriser_scale: 0.1
+  noise_kind: smooth # log # fourier fourier_scale: 0.1
   dropout: 0.0
 
 loss:
   assignment: softmin
-  temperature_scale: 1.0 # 0.8
-  temperature_power: 1.0 # 2.0
-  temperature_floor: 0.0005
+  temperature_scale: 1.0
+  temperature_power: 1.0
+  temperature_floor: 0.0005 
   detach_responsibilities: true
 
 optim:
   lr: 0.0008
   weight_decay: 0.000001
-  steps: 5000 # 3500
+  steps: 7000
   log_every: 100
   val_every: 500
 
@@ -47,6 +47,6 @@ plot:
   num_inputs: 1
   num_sigmas: 32 
   noise:
-    sigma_min: 0.01
+    sigma_min: 0.0005
     sigma_max: 2.5
     distribution: log_uniform

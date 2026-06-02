@@ -1,6 +1,6 @@
 run:
   name: uci_concrete
-  method: amcl
+  method: hmcl
   seed: 1
   output_dir: runs/uci_concrete
   device: auto
@@ -9,7 +9,7 @@ data:
   source: uci
   name: concrete
   data_root: data/uci
-  max_split: 1
+  max_split: 20
   train_ratio: 0.8
   batch_size: 1024
   seed: 1
@@ -19,9 +19,9 @@ data:
   val_split: val
 
 noise:
-  sigma_init: 0.5
-  sigma_decay: 0.95 
-  distribution: exponential_decay
+  sigma_min: 0.001
+  sigma_max: 2.5
+  distribution: log_uniform
 
 model:
   name: base_mlp

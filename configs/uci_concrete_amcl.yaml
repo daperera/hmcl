@@ -1,13 +1,13 @@
 run:
-  name: uci_power_plant
-  method: hmcl
+  name: uci_concrete
+  method: amcl
   seed: 1
-  output_dir: runs/uci_power_plant
+  output_dir: runs/uci_concrete
   device: auto
 
 data:
   source: uci
-  name: power-plant
+  name: concrete
   data_root: data/uci
   max_split: 20
   train_ratio: 0.8
@@ -19,29 +19,31 @@ data:
   val_split: val
 
 noise:
-  sigma_min: 0.001
-  sigma_max: 2.5
-  distribution: log_uniform
+  sigma_init: 0.5
+  sigma_decay: 0.95 
+  distribution: exponential_decay
 
 model:
   name: base_mlp
   num_hypotheses: 5
   hidden_dim: 50
   depth: 1
+  detach_scores: false
 
 loss:
   assignment: softmin
-  temperature_scale: 1.0 
-  temperature_power: 1.0 
+  temperature_scale: 1
+  temperature_power: 1
   temperature_floor: 0.0005
   detach_responsibilities: true
+  score_assignment: wta
 
 optim:
   lr: 0.01
   weight_decay: 0.0
   steps: 1000
   log_every: 100
-  val_every: 500
+  val_every: 100
 
 plot:
   enable: false

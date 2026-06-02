@@ -19,8 +19,8 @@ data:
   val_split: val
 
 noise:
-  sigma_min: 0.02
-  sigma_max: 1.0
+  sigma_min: 0.001
+  sigma_max: 2.5
   distribution: log_uniform
 
 model:
@@ -31,8 +31,8 @@ model:
 
 loss:
   assignment: softmin
-  temperature_scale: 0.75
-  temperature_power: 2.0
+  temperature_scale: 1.0 
+  temperature_power: 1.0 
   temperature_floor: 0.0005
   detach_responsibilities: true
 
@@ -44,5 +44,4 @@ optim:
   val_every: 500
 
 plot:
-  num_inputs: 4
-  num_sigmas: 16
+  enable: false
